@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/types"
 	"io/ioutil"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -26,6 +27,7 @@ type Parser struct {
 	packages          []*packages.Package
 	parserPackages    []*types.Package
 	conf              packages.Config
+	registerEntry     *parserEntry
 }
 
 func NewParser(buildTags []string) *Parser {
@@ -142,6 +144,10 @@ func (p *Parser) Load() error {
 	wg.Add(1)
 	go func() {
 		for _, entry := range p.entries {
+			if path.Base(entry.fileName) == "register.go" {
+				//fmt.Println("register.go !!")
+				p.registerEntry = entry
+			}
 			nv := NewNodeVisitor()
 			ast.Walk(nv, entry.syntax)
 			entry.interfaces = nv.DeclaredInterfaces()

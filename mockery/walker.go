@@ -2,6 +2,8 @@ package mockery
 
 import (
 	"fmt"
+	"go/ast"
+	"go/build"
 	"io"
 	"io/ioutil"
 	"os"
@@ -20,6 +22,7 @@ type Walker struct {
 
 type WalkerVisitor interface {
 	VisitWalk(*Interface) error
+	GenerateMockRegister(*parserEntry) error
 }
 
 func (this *Walker) Walk(visitor WalkerVisitor) (generated bool) {
@@ -30,6 +33,10 @@ func (this *Walker) Walk(visitor WalkerVisitor) (generated bool) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error walking: %v\n", err)
 		os.Exit(1)
+	}
+
+	if parser.registerEntry != nil {
+		visitor.GenerateMockRegister(parser.registerEntry)
 	}
 
 	for _, iface := range parser.Interfaces() {
@@ -93,6 +100,70 @@ type GeneratorVisitor struct {
 	Osp       OutputStreamProvider
 	// The name of the output package, if InPackage is false (defaults to "mocks")
 	PackageName string
+}
+
+func (this *GeneratorVisitor) GenerateMockRegister(entry *parserEntry) error {
+
+	template := `
+package mocks
+
+import (
+	"%s"
+	
+	"github.com/17media/api/setup/dimanager"
+)
+	
+func RegisterMock(m *dimanager.Manager) *%s {
+	mockObj := &%s{}
+	m.ProvideMock(func() %s.%s { return mockObj }, "%s")
+	return mockObj
+}
+`
+	//fmt.Printf("%#v", entry)
+	//srcPath := filepath.Join(build.Default.GOPATH, "src")
+	srcPath := strings.Join([]string{build.Default.GOPATH, "src", ""}, "/")
+	//fmt.Println(srcPath)
+	importpkg := strings.Replace(filepath.Dir(entry.fileName), srcPath, "", 1)
+	//fmt.Println(importpkg)
+	pkg := filepath.Base(importpkg)
+
+	interfaceName := ""
+	depName := ""
+
+	//fset := token.NewFileSet()
+	ast.Inspect(entry.syntax, func(node ast.Node) bool {
+		switch nt := node.(type) {
+		case *ast.FuncDecl:
+			if strings.HasPrefix(nt.Name.Name, "Get") {
+				//ast.Print(fset, nt)
+				starReturn := nt.Type.Results.List[0].Type.(*ast.Ident)
+				interfaceName = starReturn.Name
+			}
+		case *ast.FieldList:
+			//ast.Print(fset, nt)
+			if len(nt.List) == 2 {
+				first, firstOK := nt.List[0].Type.(*ast.SelectorExpr)
+				if !firstOK {
+					return true
+				}
+				if first.Sel.Name != "In" {
+					return true
+				}
+				depName = nt.List[1].Tag.Value
+				depName = strings.Split(depName, "\"")[1]
+			}
+		}
+		return true
+	})
+	//fmt.Print(this.PackageName)
+	formatCode := fmt.Sprintf(template, importpkg, interfaceName, interfaceName, pkg, interfaceName, depName)
+	fmt.Println(formatCode)
+	err := ioutil.WriteFile("./mocks/register.go", []byte(formatCode), 0644)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (this *GeneratorVisitor) VisitWalk(iface *Interface) error {
